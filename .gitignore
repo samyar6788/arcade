@@ -43,4 +43,3 @@ Thumbs.db
 # Results and generated images
 results/evaluation_results_*.json
 test_output/
-before_after/
