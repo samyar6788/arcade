@@ -5,7 +5,7 @@ Addresses prompt adherence and aesthetic drift issues
 
 import torch
 import torch.nn.functional as F
-from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
+from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, DPMSolverMultistepScheduler
 from transformers import CLIPTokenizer, CLIPTextModel
 import numpy as np
 import re
@@ -22,16 +22,16 @@ class JewelryTermEmbeddings:
         
         # Jewelry terminology dictionary with enhanced descriptions
         self.jewelry_terms = {
-            "channel-set": "gemstones precisely set in parallel grooves, flush with the band for a sleek look",
-            "threader": "long, delicate earring that threads through the ear with a thin chain or bar",
-            "bezel-set": "gemstone fully enclosed by a thin metal rim for a modern, secure setting",
-            "eternity band": "ring with a continuous circle of identical gemstones all around the band",
-            "huggie": "small hoop earring that fits closely around the earlobe",
-            "bypass": "ring where the band ends curve past each other without joining",
-            "pavé": "surface covered with small, closely set stones creating a sparkling texture",
-            "signet": "flat-topped ring, often engraved with a design or initials",
-            "cuff": "rigid, open-ended bracelet worn on the wrist",
-            "cluster": "group of multiple gemstones arranged together in one setting"
+            "channel-set": "parallel groove gemstones",
+            "threader": "thread-through earring",
+            "bezel-set": "rim-enclosed gemstone",
+            "eternity band": "full-band gemstones",
+            "huggie": "small close hoop",
+            "bypass": "overlapping band ring",
+            "pavé": "small set stones",
+            "signet": "flat engraved ring",
+            "cuff": "open bracelet",
+            "cluster": "grouped gemstones"
         }
         
         # Modern aesthetic descriptors
@@ -54,11 +54,11 @@ class JewelryTermEmbeddings:
                     term, f"{term} ({description})"
                 )
         
-        # Add modern aesthetic context
-        aesthetic_keywords = ["modern", "contemporary", "refined", "clean"]
-        for keyword in aesthetic_keywords:
-            if keyword in prompt.lower():
-                enhanced_prompt += f", {self.modern_aesthetics.get(keyword, '')}"
+        # # Add modern aesthetic context
+        # aesthetic_keywords = ["modern", "contemporary", "refined", "clean"]
+        # for keyword in aesthetic_keywords:
+        #     if keyword in prompt.lower():
+        #         enhanced_prompt += f", {self.modern_aesthetics.get(keyword, '')}"
         
         return enhanced_prompt
 
@@ -100,7 +100,7 @@ class AttentionWeighting:
     def __init__(self):
         # Define critical terms that need attention weighting
         self.critical_terms = [
-            "channel-set", "threader", "bezel-set", "eternity", "huggie",
+            "channel-set", "threader", "bezel-set", "eternity band", "huggie",
             "bypass", "pavé", "signet", "cuff", "cluster",
             "diamond", "sapphire", "gold", "platinum", "silver"
         ]
@@ -126,16 +126,30 @@ class AttentionWeighting:
 class ImprovedJewelryPipeline:
     """Main pipeline combining all improvements"""
     
-    def __init__(self, model_id: str = "runwayml/stable-diffusion-v1-5", device: str = "cuda"):
+    def __init__(self, model_id: str = "stabilityai/stable-diffusion-xl-base-1.0", device: str = "cuda"):
         self.device = device
+        self.model_id = model_id
         
-        # Load the base pipeline
-        self.pipe = StableDiffusionPipeline.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            safety_checker=None,
-            requires_safety_checker=False
-        )
+        # Determine if this is SDXL or regular SD
+        self.is_sdxl = "xl" in model_id.lower()
+        
+        if self.is_sdxl:
+            # Load SDXL pipeline
+            self.pipe = StableDiffusionXLPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                safety_checker=None,
+                requires_safety_checker=False,
+                use_safetensors=True
+            )
+        else:
+            # Load regular SD pipeline
+            self.pipe = StableDiffusionPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                safety_checker=None,
+                requires_safety_checker=False
+            )
         
         # Use DPM solver for better quality
         self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(
@@ -145,9 +159,11 @@ class ImprovedJewelryPipeline:
         self.pipe = self.pipe.to(device)
         
         # Initialize improvement modules
-        self.jewelry_embeddings = JewelryTermEmbeddings(
-            self.pipe.tokenizer, self.pipe.text_encoder
-        )
+        # For SDXL, use the first text encoder
+        text_encoder = self.pipe.text_encoder if not self.is_sdxl else self.pipe.text_encoder
+        tokenizer = self.pipe.tokenizer if not self.is_sdxl else self.pipe.tokenizer
+        
+        self.jewelry_embeddings = JewelryTermEmbeddings(tokenizer, text_encoder)
         self.aesthetic_prompting = ModernAestheticPrompting()
         self.attention_weighting = AttentionWeighting()
         
@@ -157,11 +173,17 @@ class ImprovedJewelryPipeline:
         num_images: int = 4,
         guidance_scale: float = 7.5,
         num_inference_steps: int = 50,
-        height: int = 512,
-        width: int = 512,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
         seed: Optional[int] = None
     ) -> List[torch.Tensor]:
         """Generate improved jewelry images"""
+        
+        # Set default dimensions based on model type
+        if height is None:
+            height = 1024 if self.is_sdxl else 512
+        if width is None:
+            width = 1024 if self.is_sdxl else 512
         
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -178,17 +200,27 @@ class ImprovedJewelryPipeline:
         print(f"Enhanced prompt: {enhanced_prompt}")
         print(f"Negative prompt: {negative_prompt}")
         
-        # Generate multiple candidates
-        images = self.pipe(
-            prompt=enhanced_prompt,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            height=height,
-            width=width,
-            generator=generator
-        ).images
+        # Generate multiple candidates with model-specific parameters
+        generation_kwargs = {
+            "prompt": enhanced_prompt,
+            "negative_prompt": negative_prompt,
+            "num_images_per_prompt": num_images,
+            "guidance_scale": guidance_scale,
+            "num_inference_steps": num_inference_steps,
+            "height": height,
+            "width": width,
+            "generator": generator
+        }
+        
+        # SDXL-specific parameters
+        if self.is_sdxl:
+            # SDXL works better with these default parameters
+            generation_kwargs.update({
+                "guidance_scale": 5.0,  # SDXL typically uses lower guidance
+                "num_inference_steps": 30,  # SDXL is more efficient
+            })
+        
+        images = self.pipe(**generation_kwargs).images
         
         return images
     
@@ -198,24 +230,41 @@ class ImprovedJewelryPipeline:
         num_images: int = 1,
         guidance_scale: float = 7.5,
         num_inference_steps: int = 50,
-        height: int = 512,
-        width: int = 512,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
         seed: Optional[int] = None
     ) -> List[torch.Tensor]:
         """Generate baseline images without improvements"""
+        
+        # Set default dimensions based on model type
+        if height is None:
+            height = 1024 if self.is_sdxl else 512
+        if width is None:
+            width = 1024 if self.is_sdxl else 512
         
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
         else:
             generator = None
         
-        images = self.pipe(
-            prompt=prompt,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            height=height,
-            width=width,
-            generator=generator
-        ).images
+        # Generate with model-specific parameters
+        generation_kwargs = {
+            "prompt": prompt,
+            "num_images_per_prompt": num_images,
+            "guidance_scale": guidance_scale,
+            "num_inference_steps": num_inference_steps,
+            "height": height,
+            "width": width,
+            "generator": generator
+        }
+        
+        # SDXL-specific parameters
+        if self.is_sdxl:
+            generation_kwargs.update({
+                "guidance_scale": 5.0,  # SDXL typically uses lower guidance
+                "num_inference_steps": 30,  # SDXL is more efficient
+            })
+        
+        images = self.pipe(**generation_kwargs).images
         
         return images
