@@ -11,4 +11,6 @@ jupyter>=1.0.0
 ipywidgets>=8.0.0
 requests>=2.31.0
 faiss-cpu>=1.7.4
+compel>=2.0.0
+open-clip-torch>=2.20.0
 # Note: For GPU acceleration, replace faiss-cpu with faiss-gpu
