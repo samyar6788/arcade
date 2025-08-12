@@ -43,3 +43,5 @@ Thumbs.db
 # Results and generated images
 results/evaluation_results_*.json
 test_output/
+prompt_alternatives.txt
+before_after/
